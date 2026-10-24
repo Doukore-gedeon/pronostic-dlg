@@ -23,7 +23,9 @@ CHAMPIONNATS = [
 
 def sans_accents(texte):
     texte = unicodedata.normalize("NFKD", str(texte))
-    return "".join(c for c in texte if not unicodedata.combining(c))
+    return "".join(
+        c for c in texte if not unicodedata.combining(c)
+    )
 
 
 def texte_normalise(texte):
@@ -32,41 +34,38 @@ def texte_normalise(texte):
 
 
 def reconnaitre_championnat(valeur):
-    """Associe les noms courants aux huit championnats."""
     t = texte_normalise(valeur)
 
     correspondances = {
         "Premier League — Angleterre": [
-            "premier league", "england premier league",
-            "angleterre premier league", "epl"
+            "premier league", "epl"
         ],
         "Championship — Angleterre": [
-            "championship", "england championship",
-            "angleterre championship"
+            "championship"
         ],
         "LaLiga — Espagne": [
-            "laliga", "la liga", "spain la liga",
-            "espagne laliga", "espagne la liga"
+            "laliga", "la liga"
         ],
         "Bundesliga — Allemagne": [
-            "bundesliga", "germany bundesliga",
-            "allemagne bundesliga"
+            "bundesliga"
         ],
         "Ligue 1 — France": [
-            "ligue 1", "france ligue 1", "ligue1"
+            "ligue 1", "ligue1"
         ],
         "Serie A — Italie": [
-            "serie a", "italy serie a", "italie serie a"
+            "serie a"
         ],
         "Eredivisie — Pays-Bas": [
-            "eredivisie", "netherlands eredivisie",
-            "pays bas eredivisie", "holland eredivisie"
+            "eredivisie"
         ],
         "Liga Portugal — Portugal": [
-            "liga portugal", "portugal liga portugal",
-            "portuguese league", "primeira liga"
+            "liga portugal", "primeira liga"
         ],
     }
+
+    # Vérifier les noms spécifiques avant les noms génériques.
+    if "championship" in t:
+        return "Championship — Angleterre"
 
     for championnat, alias in correspondances.items():
         if any(texte_normalise(a) in t for a in alias):
@@ -101,6 +100,7 @@ def normaliser_colonnes(df):
         "championnat": "Championnat",
         "league": "Championnat",
         "competition": "Championnat",
+        "date": "Date",
     }
 
     return df.rename(columns=alias)
@@ -108,19 +108,26 @@ def normaliser_colonnes(df):
 
 def charger_csv(fichier):
     if fichier is None:
-        return None, "Importe d'abord un fichier CSV."
+        return None, "Importe d'abord ton fichier CSV."
 
     try:
-        chemin = fichier if isinstance(fichier, str) else fichier.name
+        chemin = (
+            fichier if isinstance(fichier, str)
+            else fichier.name
+        )
 
         try:
             df = pd.read_csv(
-                chemin, sep=None, engine="python",
+                chemin,
+                sep=None,
+                engine="python",
                 encoding="utf-8-sig"
             )
         except UnicodeDecodeError:
             df = pd.read_csv(
-                chemin, sep=None, engine="python",
+                chemin,
+                sep=None,
+                engine="python",
                 encoding="latin-1"
             )
 
@@ -129,79 +136,121 @@ def charger_csv(fichier):
 
         df = normaliser_colonnes(df)
 
-        if "score_final" in df.columns:
-            scores = df["score_final"].astype(str).str.extract(
-                r"^\s*(\d{1,2})\s*[-–—:]\s*(\d{1,2})"
-            )
-            if "Buts_dom" not in df.columns:
-                df["Buts_dom"] = pd.to_numeric(
-                    scores[0], errors="coerce"
-                )
-            if "Buts_ext" not in df.columns:
-                df["Buts_ext"] = pd.to_numeric(
-                    scores[1], errors="coerce"
-                )
-
-        requis = ["Domicile", "Exterieur", "Buts_dom", "Buts_ext"]
-        manquantes = [c for c in requis if c not in df.columns]
+        # Vérifier les colonnes nécessaires pour afficher les matchs.
+        requises = ["Domicile", "Exterieur"]
+        manquantes = [
+            c for c in requises if c not in df.columns
+        ]
 
         if manquantes:
             return None, (
                 f"Colonnes manquantes : {manquantes}. "
-                f"Colonnes détectées : {list(df.columns)}"
+                f"Colonnes trouvées : {list(df.columns)}"
             )
 
+        # Les scores sont facultatifs pour charger les rencontres.
+        if "Buts_dom" not in df.columns:
+            df["Buts_dom"] = float("nan")
+
+        if "Buts_ext" not in df.columns:
+            df["Buts_ext"] = float("nan")
+
+        # Extraire les buts depuis un score du type 2-1.
+        if "score_final" in df.columns:
+            scores = df["score_final"].astype(str).str.extract(
+                r"^\s*(\d{1,2})\s*[-–—:]\s*(\d{1,2})"
+            )
+
+            buts_dom = pd.to_numeric(
+                scores[0], errors="coerce"
+            )
+            buts_ext = pd.to_numeric(
+                scores[1], errors="coerce"
+            )
+
+            df["Buts_dom"] = pd.to_numeric(
+                df["Buts_dom"], errors="coerce"
+            ).fillna(buts_dom)
+
+            df["Buts_ext"] = pd.to_numeric(
+                df["Buts_ext"], errors="coerce"
+            ).fillna(buts_ext)
+
         for col in ["Domicile", "Exterieur"]:
-            df[col] = df[col].astype(str).str.strip()
+            df[col] = df[col].fillna("").astype(str).str.strip()
 
-        df["Buts_dom"] = pd.to_numeric(df["Buts_dom"], errors="coerce")
-        df["Buts_ext"] = pd.to_numeric(df["Buts_ext"], errors="coerce")
-
-        df = df.dropna(subset=requis).copy()
         df = df[
             (df["Domicile"] != "")
             & (df["Exterieur"] != "")
             & (df["Domicile"].str.lower() != "nan")
             & (df["Exterieur"].str.lower() != "nan")
-            & (df["Buts_dom"] >= 0)
-            & (df["Buts_ext"] >= 0)
-            & (df["Buts_dom"] % 1 == 0)
-            & (df["Buts_ext"] % 1 == 0)
         ].copy()
 
         if df.empty:
-            return None, "Aucun résultat valide trouvé dans le CSV."
+            return None, "Aucune rencontre avec deux équipes valides."
 
+        # Reconnaître les championnats sans supprimer les matchs
+        # dont le score n'est pas encore renseigné.
         if "Championnat" in df.columns:
-            df["Championnat_original"] = df["Championnat"].astype(str)
+            df["Championnat_original"] = (
+                df["Championnat"].astype(str)
+            )
             df["Championnat"] = df["Championnat"].apply(
                 reconnaitre_championnat
             )
-            non_reconnus = df["Championnat"].isna().sum()
+            non_reconnus = int(df["Championnat"].isna().sum())
             df = df[df["Championnat"].notna()].copy()
 
             if df.empty:
                 return None, (
-                    "Les scores sont présents, mais aucun nom de "
-                    "championnat n'a été reconnu. Vérifie les valeurs "
-                    "de la colonne championnat dans ton CSV."
-                )
-
-            message = (
-                f"{len(df)} matchs valides chargés. "
-                f"{df['Championnat'].nunique()} championnats reconnus."
-            )
-            if non_reconnus:
-                message += (
-                    f" {non_reconnus} lignes ignorées car leur "
-                    "championnat n'a pas été reconnu."
+                    "Aucun championnat reconnu. Vérifie la "
+                    "colonne Championnat de ton CSV."
                 )
         else:
-            message = (
-                f"{len(df)} matchs chargés, mais aucune colonne "
-                "'championnat' n'a été trouvée. Le filtrage par ligue "
-                "ne sera pas disponible tant que cette colonne "
-                "n'existera pas dans le CSV."
+            return None, (
+                "La colonne Championnat est absente du CSV."
+            )
+
+        # Les colonnes de buts restent numériques.
+        df["Buts_dom"] = pd.to_numeric(
+            df["Buts_dom"], errors="coerce"
+        )
+        df["Buts_ext"] = pd.to_numeric(
+            df["Buts_ext"], errors="coerce"
+        )
+
+        # Seules les lignes avec deux scores entiers valides
+        # seront utilisables pour le calcul statistique.
+        scores_valides = (
+            df["Buts_dom"].notna()
+            & df["Buts_ext"].notna()
+            & (df["Buts_dom"] >= 0)
+            & (df["Buts_ext"] >= 0)
+            & (df["Buts_dom"] % 1 == 0)
+            & (df["Buts_ext"] % 1 == 0)
+        )
+
+        nb_matchs = len(df)
+        nb_resultats = int(scores_valides.sum())
+        nb_championnats = df["Championnat"].nunique()
+
+        message = (
+            f"Chargement réussi : {nb_matchs} rencontres, "
+            f"{nb_championnats} championnats reconnus, "
+            f"{nb_resultats} résultats avec scores réels."
+        )
+
+        if nb_resultats == 0:
+            message += (
+                "\nLes rencontres sont chargées, mais aucun "
+                "pronostic Poisson ne peut encore être calculé : "
+                "il faut ajouter des résultats historiques."
+            )
+
+        if non_reconnus:
+            message += (
+                f"\n{non_reconnus} lignes ignorées car leur "
+                "championnat n'a pas été reconnu."
             )
 
         return df, message
@@ -220,33 +269,81 @@ def poisson(k, moyenne):
 
 def analyser_match(df, equipe_dom, equipe_ext):
     if df is None or df.empty:
-        return "Charge un CSV valide et choisis un championnat."
+        return "Charge d'abord un CSV valide."
+
     if not equipe_dom or not equipe_ext:
         return "Choisis les deux équipes."
+
     if equipe_dom == equipe_ext:
         return "Choisis deux équipes différentes."
 
-    matchs_dom = df[df["Domicile"] == equipe_dom]
-    matchs_ext = df[df["Exterieur"] == equipe_ext]
+    # Garder uniquement les matchs dont les scores sont valides.
+    historiques = df[
+        df["Buts_dom"].notna()
+        & df["Buts_ext"].notna()
+        & (df["Buts_dom"] >= 0)
+        & (df["Buts_ext"] >= 0)
+        & (df["Buts_dom"] % 1 == 0)
+        & (df["Buts_ext"] % 1 == 0)
+    ].copy()
 
-    moyenne_dom = df["Buts_dom"].mean()
-    moyenne_ext = df["Buts_ext"].mean()
+    if historiques.empty:
+        return (
+            "ANALYSE IMPOSSIBLE POUR LE MOMENT\n\n"
+            "Ton CSV contient les rencontres, mais aucun score "
+            "historique exploitable.\n\n"
+            "Ajoute des matchs déjà terminés avec les colonnes "
+            "Buts_dom et Buts_ext, puis recharge le CSV.\n\n"
+            "PRONOSTIC DLG ne va pas inventer des probabilités."
+        )
+
+    # Utiliser seulement les résultats du championnat sélectionné.
+    if "Championnat" in df.columns and "Championnat" in historiques.columns:
+        ligues_selectionnees = df["Championnat"].dropna().unique()
+
+        if len(ligues_selectionnees) == 1:
+            historique_ligue = historiques[
+                historiques["Championnat"] == ligues_selectionnees[0]
+            ]
+        else:
+            historique_ligue = historiques
+    else:
+        historique_ligue = historiques
+
+    if len(historique_ligue) < 5:
+        return (
+            "Données historiques insuffisantes dans ce championnat.\n\n"
+            f"Nombre de résultats disponibles : "
+            f"{len(historique_ligue)}.\n"
+            "Ajoute davantage de matchs terminés avant de calculer "
+            "des probabilités."
+        )
+
+    matchs_dom = historique_ligue[
+        historique_ligue["Domicile"] == equipe_dom
+    ]
+    matchs_ext = historique_ligue[
+        historique_ligue["Exterieur"] == equipe_ext
+    ]
+
+    moyenne_dom = historique_ligue["Buts_dom"].mean()
+    moyenne_ext = historique_ligue["Buts_ext"].mean()
 
     attaque_dom = (
         matchs_dom["Buts_dom"].mean()
-        if not matchs_dom.empty else moyenne_dom
+        if len(matchs_dom) >= 2 else moyenne_dom
     )
     defense_ext = (
         matchs_ext["Buts_dom"].mean()
-        if not matchs_ext.empty else moyenne_dom
+        if len(matchs_ext) >= 2 else moyenne_dom
     )
     attaque_ext = (
         matchs_ext["Buts_ext"].mean()
-        if not matchs_ext.empty else moyenne_ext
+        if len(matchs_ext) >= 2 else moyenne_ext
     )
     defense_dom = (
         matchs_dom["Buts_ext"].mean()
-        if not matchs_dom.empty else moyenne_ext
+        if len(matchs_dom) >= 2 else moyenne_ext
     )
 
     lambda_dom = max(0.05, (attaque_dom + defense_ext) / 2)
@@ -257,15 +354,22 @@ def analyser_match(df, equipe_dom, equipe_ext):
         for a in range(MAX_BUTS + 1)
         for b in range(MAX_BUTS + 1)
     }
+
     total = sum(scores.values())
+    if total <= 0:
+        return "Impossible de calculer les probabilités avec ces données."
+
     scores = {s: p / total for s, p in scores.items()}
 
-    p1 = sum(p for (a, b), p in scores.items() if a > b)
-    pn = sum(p for (a, b), p in scores.items() if a == b)
-    p2 = sum(p for (a, b), p in scores.items() if a < b)
-
     def prob(condition):
-        return sum(p for (a, b), p in scores.items() if condition(a, b))
+        return sum(
+            p for (a, b), p in scores.items()
+            if condition(a, b)
+        )
+
+    p1 = prob(lambda a, b: a > b)
+    pn = prob(lambda a, b: a == b)
+    p2 = prob(lambda a, b: a < b)
 
     over05 = prob(lambda a, b: a + b >= 1)
     over15 = prob(lambda a, b: a + b >= 2)
@@ -322,47 +426,54 @@ def analyser_match(df, equipe_dom, equipe_ext):
 
     lignes.extend([
         "",
-        "Attention : ces probabilités sont des estimations, pas des garanties.",
-        "La fiabilité dépend de la qualité et du volume des données historiques."
+        f"Résultats historiques utilisés : {len(historique_ligue)}",
+        "Attention : ces probabilités sont des estimations, "
+        "pas des garanties."
     ])
+
     return "\n".join(lignes)
-
-
-def actualiser_championnats(df):
-    if df is None or "Championnat" not in df.columns:
-        return gr.update(choices=[], value=None), (
-            "Le CSV doit contenir une colonne championnat."
-        )
-    presents = sorted(df["Championnat"].dropna().unique().tolist())
-    return gr.update(choices=presents, value=None), (
-        f"Championnats présents dans le fichier : {len(presents)}. "
-        "Seuls ceux disposant de données apparaissent."
-    )
 
 
 def actualiser_equipes(df, championnat):
     if df is None or not championnat:
-        return None, gr.update(choices=[], value=None), gr.update(choices=[], value=None), (
-            "Choisis un championnat avec des données."
+        return (
+            None,
+            gr.update(choices=[], value=None),
+            gr.update(choices=[], value=None),
+            "Choisis un championnat."
         )
 
     filtre = df[df["Championnat"] == championnat].copy()
+
     if filtre.empty:
-        return filtre, gr.update(choices=[], value=None), gr.update(choices=[], value=None), (
-            f"Aucun match historique pour {championnat}."
+        return (
+            filtre,
+            gr.update(choices=[], value=None),
+            gr.update(choices=[], value=None),
+            f"Aucune rencontre trouvée pour {championnat}."
         )
 
-    equipes = sorted(set(filtre["Domicile"]) | set(filtre["Exterieur"]))
+    equipes = sorted(
+        set(filtre["Domicile"]) | set(filtre["Exterieur"])
+    )
+
+    historiques = filtre[
+        filtre["Buts_dom"].notna()
+        & filtre["Buts_ext"].notna()
+    ]
+
     return (
         filtre,
         gr.update(choices=equipes, value=None),
         gr.update(choices=equipes, value=None),
-        f"{championnat} : {len(filtre)} matchs et {len(equipes)} équipes."
+        f"{championnat} : {len(filtre)} rencontres chargées ; "
+        f"{len(historiques)} avec scores historiques."
     )
 
 
 def charger_interface(fichier):
     df, message = charger_csv(fichier)
+
     if df is None:
         return (
             None,
@@ -372,10 +483,8 @@ def charger_interface(fichier):
             message
         )
 
-    choix = (
-        sorted(df["Championnat"].dropna().unique().tolist())
-        if "Championnat" in df.columns else []
-    )
+    choix = sorted(df["Championnat"].dropna().unique().tolist())
+
     return (
         df,
         gr.update(choices=choix, value=None),
@@ -388,16 +497,19 @@ def charger_interface(fichier):
 with gr.Blocks(title="PRONOSTIC DLG") as demo:
     gr.Markdown(
         "# ⚽ PRONOSTIC DLG\n"
-        "### Analyse statistique des matchs historiques avec Poisson\n"
-        "Importe un CSV, charge les données, choisis un championnat, "
-        "puis sélectionne les deux équipes."
+        "### Analyse statistique des matchs avec le modèle de Poisson\n"
+        "Importe ton CSV, charge les rencontres, choisis un championnat "
+        "et sélectionne deux équipes.\n\n"
+        "**Important :** pour obtenir des probabilités, il faut aussi "
+        "des résultats historiques avec les scores réels."
     )
 
     fichier = gr.File(
-        label="Fichier CSV historique",
+        label="Fichier CSV des rencontres et/ou résultats historiques",
         file_types=[".csv"],
         type="filepath"
     )
+
     charger = gr.Button("Charger les données", variant="primary")
     message = gr.Textbox(label="État du chargement", interactive=False)
 
@@ -417,30 +529,45 @@ with gr.Blocks(title="PRONOSTIC DLG") as demo:
 
     with gr.Row():
         equipe_dom = gr.Dropdown(
-            label="Équipe à domicile", choices=[], interactive=True
+            label="Équipe à domicile",
+            choices=[],
+            interactive=True
         )
         equipe_ext = gr.Dropdown(
-            label="Équipe à l'extérieur", choices=[], interactive=True
+            label="Équipe à l'extérieur",
+            choices=[],
+            interactive=True
         )
 
     analyser = gr.Button("Analyser le match", variant="primary")
+
     resultat = gr.Textbox(
-        label="Analyse PRONOSTIC DLG", lines=32, interactive=False
+        label="Analyse PRONOSTIC DLG",
+        lines=32,
+        interactive=False
     )
 
     charger.click(
         fn=charger_interface,
         inputs=[fichier],
         outputs=[
-            donnees_completes, championnat,
-            equipe_dom, equipe_ext, message
+            donnees_completes,
+            championnat,
+            equipe_dom,
+            equipe_ext,
+            message
         ]
     )
 
     championnat.change(
         fn=actualiser_equipes,
         inputs=[donnees_completes, championnat],
-        outputs=[donnees_ligue, equipe_dom, equipe_ext, etat_ligue]
+        outputs=[
+            donnees_ligue,
+            equipe_dom,
+            equipe_ext,
+            etat_ligue
+        ]
     )
 
     analyser.click(
@@ -455,5 +582,3 @@ if __name__ == "__main__":
         server_name="0.0.0.0",
         server_port=int(os.environ.get("PORT", 10000))
     )
-
-
